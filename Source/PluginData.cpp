@@ -101,20 +101,15 @@ void Cartridge::packProgram(uint8_t *src, int idx, String name, char *opSwitch) 
 
 /**
  * This function normalize data that comes from corrupted sysex.
- * It used to avoid engine crashing upon extreme values
+ * It's used to avoid engine crashing upon extreme values
  */
-char normparm(char value, char max, int id) {
-    if ( value <= max && value >= 0 )
-        return value;
-    
-    // if this is beyond the max, we expect a 0-255 range, normalize this
-    // to the expected return value; and this value as a random data.
-    
-    value = abs(value);
-    
-    char v = ((float)value)/255 * max;
+char normparm(char value, char max) {
+    if ( value < 0 || value > max ) {
+        TRACE("value %d out of range %d", value, max);
+        return 0;
+    }
 
-    return v;
+    return value;
 }
 
 void Cartridge::unpackProgram(uint8_t *unpackPgm, int idx) {
@@ -122,43 +117,52 @@ void Cartridge::unpackProgram(uint8_t *unpackPgm, int idx) {
     char *bulk = (char *)voiceData + 6 + (idx * 128);
     
     for (int op = 0; op < 6; op++) {
-        // eg rate and level, brk pt, depth, scaling
-        
         for(int i=0; i<11; i++) {
-            unpackPgm[op * 21 + i] = normparm(bulk[op * 17 + i], 99, i);
+            unpackPgm[op * 21 + i] = normparm(bulk[op * 17 + i], 99);   // op eg rate and level, brk pt, left and right depth
         }
         
-        memcpy(unpackPgm + op * 21, bulk + op * 17, 11);
         char leftrightcurves = bulk[op * 17 + 11];
-        unpackPgm[op * 21 + 11] = leftrightcurves & 3;
-        unpackPgm[op * 21 + 12] = (leftrightcurves >> 2) & 3;
+        unpackPgm[op * 21 + 11] = leftrightcurves & 3;          // left curve
+        unpackPgm[op * 21 + 12] = (leftrightcurves >> 2) & 3;   // right curve
+
         char detune_rs = bulk[op * 17 + 12];
-        unpackPgm[op * 21 + 13] = detune_rs & 7;
+        unpackPgm[op * 21 + 13] = detune_rs & 7;       // keyboard rate scaling
+
         char kvs_ams = bulk[op * 17 + 13];
-        unpackPgm[op * 21 + 14] = kvs_ams & 3;
-        unpackPgm[op * 21 + 15] = kvs_ams >> 2;
-        unpackPgm[op * 21 + 16] = bulk[op * 17 + 14];  // output level
+        unpackPgm[op * 21 + 14] = kvs_ams & 3;         // mod sensitivity amplitude
+        unpackPgm[op * 21 + 15] = (kvs_ams >> 2) & 7;  // operator key velocity sensitivity
+
+        unpackPgm[op * 21 + 16] = normparm(bulk[op * 17 + 14], 99);  // output level
+
         char fcoarse_mode = bulk[op * 17 + 15];
-        unpackPgm[op * 21 + 17] = fcoarse_mode & 1;
-        unpackPgm[op * 21 + 18] = fcoarse_mode >> 1;
-        unpackPgm[op * 21 + 19] = bulk[op * 17 + 16];  // fine freq
-        unpackPgm[op * 21 + 20] = detune_rs >> 3;
+        unpackPgm[op * 21 + 17] = fcoarse_mode & 1;                  // oscillator mode
+        unpackPgm[op * 21 + 18] = (fcoarse_mode >> 1) & 31;          // frequency coarse
+        unpackPgm[op * 21 + 19] = normparm(bulk[op * 17 + 16], 99);  // frequency fine
+
+        unpackPgm[op * 21 + 20] = normparm(detune_rs >> 3, 14);      // detune
     }
     
     for (int i=0; i<8; i++)  {
-        unpackPgm[126+i] = normparm(bulk[102+i], 99, 126+i);
+        unpackPgm[126+i] = normparm(bulk[102+i], 99);  // pitch eg rate and level
     }
-    unpackPgm[134] = normparm(bulk[110], 31, 134);
+    unpackPgm[134] = normparm(bulk[110], 31);          // algorithm
     
     char oks_fb = bulk[111];
-    unpackPgm[135] = oks_fb & 7;
-    unpackPgm[136] = oks_fb >> 3;
-    memcpy(unpackPgm + 137, bulk + 112, 4);  // lfo
+    unpackPgm[135] = oks_fb & 7;                       // feedback
+    unpackPgm[136] = (oks_fb >> 3) & 1;                // osc key sync
+
+    for (int i=0; i<4; i++)  {
+        unpackPgm[137+i] = normparm(bulk[112+i], 99);  // lfo speed, delay, pt mod dep, am mod dep
+    }
+
     char lpms_lfw_lks = bulk[116];
-    unpackPgm[141] = lpms_lfw_lks & 1;
-    unpackPgm[142] = (lpms_lfw_lks >> 1) & 7;
-    unpackPgm[143] = lpms_lfw_lks >> 4;
-    memcpy(unpackPgm + 144, bulk + 117, 11);  // transpose, name
+    unpackPgm[141] = lpms_lfw_lks & 1;                        // lfo sync
+    unpackPgm[142] = normparm((lpms_lfw_lks >> 1) & 7, 5);    // lfo wave
+    unpackPgm[143] = lpms_lfw_lks >> 4;                       // lfo pitch mod sensitivity
+
+    unpackPgm[144] = normparm(bulk[117], 48);           // transpose
+
+    memcpy(unpackPgm + 145, bulk + 118, 10);            // name
 }
 
 void DexedAudioProcessor::loadCartridge(Cartridge &sysex) {
